@@ -1,4 +1,7 @@
 // services/service-container.js
+// [Version: 2026-01-08-Fix-ProductWriter]
+// [Date: 2026-01-08]
+// Description: 修正 ProductWriter 未被實例化導致 ProductService 崩潰的問題
 
 const { google } = require('googleapis');
 const AuthService = require('./auth-service');
@@ -10,8 +13,9 @@ const {
     OpportunityReader, ContactReader, CompanyReader, InteractionReader,
     EventLogReader, WeeklyBusinessReader, AnnouncementReader, ProductReader,
     AuthReader, ConfigReader,
+    
     CompanyWriter, ContactWriter, OpportunityWriter, InteractionWriter,
-    EventLogWriter, WeeklyBusinessWriter, AnnouncementWriter,
+    EventLogWriter, WeeklyBusinessWriter, AnnouncementWriter, ProductWriter, // ✅ [Fix 1] 加入 ProductWriter
     AuthWriter, ConfigWriter
 } = require('../data');
 
@@ -43,14 +47,12 @@ async function initializeServices() {
     const announcementReader = new AnnouncementReader(sheets);
     const productReader = new ProductReader(sheets);
     const authReader = new AuthReader(sheets);
-    // Instantiate ConfigReader
     const configReader = new ConfigReader(sheets);
 
     const readers = {
         opportunityReader, contactReader, companyReader, interactionReader,
         eventLogReader, weeklyBusinessReader, announcementReader, productReader,
-        authReader, 
-        configReader // Added to readers object
+        authReader, configReader
     };
 
     // 4. Writers
@@ -61,15 +63,18 @@ async function initializeServices() {
     const eventLogWriter = new EventLogWriter(sheets, eventLogReader, opportunityReader);
     const weeklyBusinessWriter = new WeeklyBusinessWriter(sheets, weeklyBusinessReader);
     const announcementWriter = new AnnouncementWriter(sheets, announcementReader);
+    
+    // ✅ [Fix 2] 實例化 ProductWriter (注意：ProductWriter 需要 productReader)
+    const productWriter = new ProductWriter(sheets, productReader);
+    
     const authWriter = new AuthWriter(sheets);
-    // Instantiate ConfigWriter
     const configWriter = new ConfigWriter(sheets);
 
     const writers = {
         companyWriter, contactWriter, opportunityWriter, interactionWriter,
         eventLogWriter, weeklyBusinessWriter, announcementWriter,
-        authWriter, 
-        configWriter // Added to writers object
+        productWriter, // ✅ [Fix 3] 加入 writers 容器
+        authWriter, configWriter
     };
 
     // 5. Services
@@ -89,11 +94,9 @@ async function initializeServices() {
         isInitialized: true
     });
 
-
-    // =========== 抓鬼偵測器 (請加入這三行) ===========
-    console.log('🔍 [Debug] Readers keys:', Object.keys(readers));
-    console.log('🔍 [Debug] ConfigReader in readers:', !!readers.configReader);
-    console.log('🔍 [Debug] Service Container has configReader:', !!services.configReader);
+    // =========== 抓鬼偵測器 (Debug) ===========
+    console.log('🔍 [Debug] Writers keys:', Object.keys(writers));
+    console.log('🔍 [Debug] Service Container has productWriter:', !!services.productWriter);
     // =================================================
 
     console.log('✅ [Service Container] 所有服務初始化完成！');

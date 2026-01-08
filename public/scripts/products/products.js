@@ -1,4 +1,6 @@
 // public/scripts/products/products.js
+// [Fix: 2026-01-08-UI-Safety]
+// Description: 加入 DOM 元素安全檢查，防止因找不到按鈕導致的 "Cannot set properties of null" 錯誤
 
 window.ProductManager = {
     allProducts: [],
@@ -6,7 +8,7 @@ window.ProductManager = {
     categoryOrder: [], 
     isEditMode: false,
     hasBoundGlobalEvents: false,
-    detailModal: null, // 用來存放 Modal 實例
+    detailModal: null,
 
     async init() {
         const container = document.getElementById('page-products');
@@ -20,11 +22,10 @@ window.ProductManager = {
             return;
         }
 
-        // 初始化 Modal 實例 (依賴 product-detail-modal.js)
         if (typeof ProductDetailModal !== 'undefined') {
             this.detailModal = new ProductDetailModal();
         } else {
-            console.error('ProductDetailModal class not found! 請確認是否已載入 product-detail-modal.js');
+            console.error('ProductDetailModal class not found!');
         }
 
         await this.loadCategoryOrder();
@@ -35,7 +36,7 @@ window.ProductManager = {
 
     async loadData() {
         const container = document.getElementById('product-groups-container');
-        if (this.allProducts.length === 0) {
+        if (this.allProducts.length === 0 && container) {
             container.innerHTML = `<div class="loading show"><div class="spinner"></div><p>載入商品資料中...</p></div>`;
         }
         try {
@@ -44,7 +45,7 @@ window.ProductManager = {
             this.allProducts = res.data || [];
             this.renderTable();
         } catch (error) {
-            container.innerHTML = `<div class="alert alert-error">${error.message}</div>`;
+            if(container) container.innerHTML = `<div class="alert alert-error">${error.message}</div>`;
         }
     },
 
@@ -105,25 +106,25 @@ window.ProductManager = {
         document.addEventListener('click', (e) => {
             const target = e.target.closest('button');
             if (!target) return;
-            // 排除 Modal 內部按鈕 (由 ProductDetailModal 自己處理)
             if (target.closest('.modal')) return;
-            if (!document.getElementById('page-products').contains(target)) return;
+            
+            // 加入安全檢查，確保頁面元素存在
+            const page = document.getElementById('page-products');
+            if (!page || !page.contains(target)) return;
 
             if (target.id === 'btn-refresh-products') this.forceRefresh();
             if (target.id === 'btn-toggle-edit') this.setEditMode(!this.isEditMode);
             if (target.id === 'btn-save-batch') this.saveAll();
             if (target.id === 'btn-add-row') this.addNewRow();
             
-            // 處理舊的 modal 關閉按鈕 (以防萬一，或列表上的其他按鈕)
             if (target.classList.contains('close-modal')) {
                 if(this.detailModal) this.detailModal.close();
             }
         });
 
-        // 點擊背景關閉 Modal
         window.addEventListener('click', (e) => {
             const modal = document.getElementById('product-detail-modal');
-            if (e.target === modal) {
+            if (modal && e.target === modal) {
                 if(this.detailModal) this.detailModal.close();
                 else modal.style.display = 'none';
             }
@@ -246,7 +247,6 @@ window.ProductManager = {
                     const costDisplay = isRevealed ? fmtMoney(item.cost) : '$ $$$';
                     const costClass = isRevealed ? 'sensitive-value revealed' : 'sensitive-value masked';
 
-                    // 點擊整列開啟 Modal (Open Detail Modal)
                     html += `
                         <tr onclick="ProductManager.openDetailModal('${item.id}')">
                             <td class="text-muted font-mono">${itemNum}</td>
@@ -359,14 +359,12 @@ window.ProductManager = {
         }
     },
 
-    // [修改] 呼叫外部 Modal
     openDetailModal(id) {
         if (!this.detailModal) return;
 
         const product = this.allProducts.find(p => p.id === id);
         if (!product) return;
 
-        // 收集所有分類 (包含目前排序設定與現有產品的分類)
         const existingCategories = Array.from(new Set(this.allProducts.map(p => p.category).filter(Boolean)));
         const allCats = Array.from(new Set([...this.categoryOrder, ...existingCategories]));
 
@@ -380,7 +378,6 @@ window.ProductManager = {
     },
 
     async handleSingleProductSave(updatedData) {
-        // 使用 batch API 更新單筆
         try {
             const res = await authedFetch('/api/products/batch', {
                 method: 'POST',
@@ -389,7 +386,6 @@ window.ProductManager = {
             });
 
             if(res.success) {
-                // 更新本地資料
                 const idx = this.allProducts.findIndex(p => p.id === updatedData.id);
                 if (idx !== -1) {
                     this.allProducts[idx] = { ...this.allProducts[idx], ...updatedData };
@@ -400,7 +396,7 @@ window.ProductManager = {
             }
         } catch (e) {
             console.error(e);
-            throw e; // 拋出讓 Modal 顯示錯誤
+            throw e; 
         }
     },
 
@@ -411,6 +407,7 @@ window.ProductManager = {
         this.renderTable();
     },
 
+    // [Fix] 加入 DOM 元素存在性檢查
     setEditMode(active, skipLoad = false) {
         this.isEditMode = active;
         
@@ -419,16 +416,20 @@ window.ProductManager = {
         const btnAdd = document.getElementById('btn-add-row');
 
         if (this.isEditMode) {
-            btnEdit.textContent = '❌ 取消';
-            btnEdit.classList.add('danger');
-            btnSave.style.display = 'inline-block';
-            btnAdd.style.display = 'inline-block';
+            if(btnEdit) {
+                btnEdit.textContent = '❌ 取消';
+                btnEdit.classList.add('danger');
+            }
+            if(btnSave) btnSave.style.display = 'inline-block';
+            if(btnAdd) btnAdd.style.display = 'inline-block';
             this.renderTable(); 
         } else {
-            btnEdit.textContent = '✏️ 列表編輯';
-            btnEdit.classList.remove('danger');
-            btnSave.style.display = 'none';
-            btnAdd.style.display = 'none';
+            if(btnEdit) {
+                btnEdit.textContent = '✏️ 列表編輯';
+                btnEdit.classList.remove('danger');
+            }
+            if(btnSave) btnSave.style.display = 'none';
+            if(btnAdd) btnAdd.style.display = 'none';
             
             if (skipLoad) {
                 this.renderTable();
@@ -475,7 +476,7 @@ window.ProductManager = {
                 if(refreshRes.success) {
                     this.allProducts = refreshRes.data || [];
                 }
-                this.setEditMode(false, true);
+                this.setEditMode(false, true); // 這裡不會再報錯了
             } else {
                 throw new Error(res.error);
             }
@@ -488,10 +489,10 @@ window.ProductManager = {
 
     async forceRefresh() {
         const btn = document.getElementById('btn-refresh-products');
-        btn.textContent = '...';
+        if(btn) btn.textContent = '...';
         await authedFetch('/api/products/refresh', { method: 'POST' });
         await this.loadData();
-        btn.textContent = '⟳';
+        if(btn) btn.textContent = '⟳';
     }
 };
 

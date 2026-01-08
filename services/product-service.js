@@ -1,103 +1,76 @@
 // services/product-service.js
-const { google } = require('googleapis');
-const config = require('../config');
-const AuthService = require('./auth-service');
-const ProductReader = require('../data/product-reader');
-const ProductWriter = require('../data/product-writer');
+// [Version: 2026-01-08-Refactor-BatchFix]
+// [Date: 2026-01-08]
 
 class ProductService {
-    constructor() {
-        this.reader = null;
-        this.writer = null;
+    constructor(services) {
+        this.productReader = services.productReader;
+        this.productWriter = services.productWriter;
+        this.configReader = services.configReader;
+        this.configWriter = services.configWriter;
     }
 
-    async _getReader() {
-        if (!this.reader) {
-            try {
-                const authService = new AuthService();
-                const auth = await authService.getOAuthClient();
-                const sheets = google.sheets({ version: 'v4', auth });
-                this.reader = new ProductReader(sheets);
-            } catch (error) {
-                console.error('[ProductService] 初始化 Reader 失敗:', error);
-                throw error;
-            }
+    async getProducts(query = null) {
+        let products = await this.productReader.getAllProducts();
+        if (query) {
+            const lowerQ = query.toLowerCase();
+            products = products.filter(p => 
+                (p.name && p.name.toLowerCase().includes(lowerQ)) ||
+                (p.id && p.id.toLowerCase().includes(lowerQ)) ||
+                (p.category && p.category.toLowerCase().includes(lowerQ))
+            );
         }
-        return this.reader;
+        return products;
     }
 
-    async _getWriter() {
-        if (!this.writer) {
-            try {
-                const authService = new AuthService();
-                const auth = await authService.getOAuthClient();
-                const sheets = google.sheets({ version: 'v4', auth });
-                this.writer = new ProductWriter(sheets);
-            } catch (error) {
-                console.error('[ProductService] 初始化 Writer 失敗:', error);
-                throw error;
-            }
-        }
-        return this.writer;
-    }
-
-    async getProducts(query = '') {
-        try {
-            const reader = await this._getReader();
-            let products = await reader.getAllProducts();
-
-            if (!Array.isArray(products)) {
-                console.warn('[ProductService] 讀取到的資料異常 (非陣列):', products);
-                return [];
-            }
-
-            if (query) {
-                const q = query.trim().toLowerCase();
-                products = products.filter(p => 
-                    (p.name && p.name.toLowerCase().includes(q)) ||
-                    (p.id && p.id.toLowerCase().includes(q)) ||
-                    (p.spec && p.spec.toLowerCase().includes(q)) ||
-                    (p.supplier && p.supplier.toLowerCase().includes(q))
-                );
-            }
-
-            // 【修改】預設排序由 ID 遞增 (Ascending: A->Z, 1->9)
-            // 使用 numeric: true 確保 P10 會排在 P2 後面，而不是 P1 後面
-            products.sort((a, b) => (a.id || '').localeCompare(b.id || '', undefined, { numeric: true }));
-
-            return products;
-        } catch (error) {
-            console.error('[ProductService] getProducts 執行錯誤:', error);
-            throw error;
-        }
-    }
-
-    async saveAll(products, user) {
-        try {
-            console.log(`[ProductService] 開始批次儲存 ${products.length} 筆資料...`);
-            const writer = await this._getWriter();
-            
-            // 執行寫入
-            const result = await writer.saveBatch(products, user);
-            
-            // 寫入成功後，清除快取以確保下次讀取是新的
-            await this.refreshCache();
-            
-            return result;
-        } catch (error) {
-            console.error('[ProductService] saveAll 失敗:', error);
-            throw error;
-        }
+    async getProductById(productId) {
+        return this.productReader.findProductById(productId);
     }
 
     async refreshCache() {
-        const reader = await this._getReader();
-        if (reader.cache && reader.cacheKey) {
-            delete reader.cache[reader.cacheKey];
-            console.log(`[ProductService] 已清除快取 Key: ${reader.cacheKey}`);
+        this.productReader.invalidateCache('marketProducts');
+        await this.productReader.getAllProducts();
+    }
+
+    /**
+     * 批次儲存
+     * [Fix] 改用 Writer 的 saveBatch 進行原子化批次寫入，避免 N+1 API 呼叫
+     */
+    async saveAll(products, user) {
+        if (!Array.isArray(products) || products.length === 0) {
+            return { updated: 0, appended: 0 };
         }
-        return await this.getProducts();
+        
+        // 直接轉發給 Writer 處理
+        try {
+            return await this.productWriter.saveBatch(products, user);
+        } catch (err) {
+            console.error('[ProductService] 批次儲存失敗:', err);
+            throw err;
+        }
+    }
+
+    async getCategoryOrder() {
+        const systemConfig = await this.configReader.getSystemConfig();
+        let order = [];
+        if (systemConfig['SystemPref']) {
+            const pref = systemConfig['SystemPref'].find(p => p.value === 'PRODUCT_CATEGORY_ORDER');
+            if (pref && pref.note) {
+                try { order = JSON.parse(pref.note); } catch (e) {}
+            }
+        }
+        return order;
+    }
+
+    async saveCategoryOrder(orderArray) {
+        if (!Array.isArray(orderArray)) throw new Error('分類排序必須是陣列');
+        const jsonString = JSON.stringify(orderArray);
+        await this.configWriter.updateSystemPref('PRODUCT_CATEGORY_ORDER', jsonString);
+        if (this.configReader.cache['systemConfig']) {
+            delete this.configReader.cache['systemConfig'];
+        }
+        return { success: true };
     }
 }
 
-module.exports = new ProductService();
+module.exports = ProductService;

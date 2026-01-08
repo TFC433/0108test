@@ -1,13 +1,14 @@
 // services/index.js
-// [Version: 2026-01-08-Fix-Dependency]
+// [Version: 2026-01-08-Refactor-Stage3]
 // [Date: 2026-01-08]
-// Description: 修正 ContactService 缺失與解決循環依賴問題
+// Description: 註冊 ProductService，完成 Stage 3 重構
 
 const config = require('../config');
 const DashboardService = require('./dashboard-service');
 const OpportunityService = require('./opportunity-service');
 const CompanyService = require('./company-service');
-const ContactService = require('./contact-service'); // ✅ 新增引入
+const ContactService = require('./contact-service');
+const ProductService = require('./product-service'); // ✅ 新增引入
 const EventLogService = require('./event-log-service');
 const WeeklyBusinessService = require('./weekly-business-service');
 const SalesAnalysisService = require('./sales-analysis-service');
@@ -21,11 +22,10 @@ function initializeBusinessServices(coreServices) {
     const servicesWithUtils = { ...coreServices, config, dateHelpers };
 
     // 1. 實例化服務 (注意順序)
-    // ✅ 建立 ContactService (此時它的 this.dashboardService 會是 undefined，稍後修補)
     const contactService = new ContactService(servicesWithUtils);
-    
     const opportunityService = new OpportunityService(servicesWithUtils);
     const companyService = new CompanyService(servicesWithUtils);
+    const productService = new ProductService(servicesWithUtils); // ✅ 實例化 ProductService
     const eventLogService = new EventLogService(servicesWithUtils);
     const weeklyBusinessService = new WeeklyBusinessService(servicesWithUtils);
     const salesAnalysisService = new SalesAnalysisService(servicesWithUtils);
@@ -33,21 +33,25 @@ function initializeBusinessServices(coreServices) {
     // 2. 準備包含所有服務的物件 (供 Dashboard 使用)
     const allInitializedServices = {
         ...servicesWithUtils,
-        contactService, // ✅ 加入 ContactService 供 Dashboard 使用
+        contactService,
         opportunityService,
         companyService,
+        productService, // ✅ 加入列表供 Dashboard 使用
         eventLogService,
         weeklyBusinessService,
         salesAnalysisService
     };
 
-    // 3. 實例化 DashboardService (此時它能拿到 contactService)
+    // 3. 實例化 DashboardService
     const dashboardService = new DashboardService(allInitializedServices);
 
-    // 4. ✅ [關鍵修正] 解決循環依賴：手動將 dashboardService 注入回 contactService
+    // 4. 解決循環依賴 (依賴注入修補)
     contactService.dashboardService = dashboardService;
+    
+    // 若 ProductService 未來需要呼叫 Dashboard，也可在此修補
+    productService.dashboardService = dashboardService;
 
-    console.log('✅ [Service Container] ContactService 已註冊並完成依賴注入');
+    console.log('✅ [Service Container] 所有業務服務 (含 ProductService) 初始化完成');
 
     // 回傳完整的服務容器
     return {
@@ -61,9 +65,10 @@ function initializeBusinessServices(coreServices) {
 
         // 業務邏輯服務
         dashboardService,
-        contactService, // ✅ 必須匯出，Controller 才能使用
+        contactService,
         opportunityService,
         companyService,
+        productService, // ✅ 必須匯出，Controller 才能使用
         eventLogService,
         weeklyBusinessService,
         salesAnalysisService,
