@@ -1,6 +1,10 @@
 // data/contact-reader.js
+// [Version: 2026-01-08-Refactor-Stage2]
+// [Date: 2026-01-08]
+// Description: 負責讀取聯絡人資料 (含原始名片與正式聯絡人)，並將資料轉換為標準化 DTO
 
 const BaseReader = require('./base-reader');
+const { parseString, parseDate } = require('../utils/data-parsers');
 
 /**
  * 專門負責讀取所有與「聯絡人」相關資料的類別
@@ -27,26 +31,30 @@ class ContactReader extends BaseReader {
         const range = `${this.config.SHEETS.CONTACTS}!A:Y`;
 
         const rowParser = (row, index) => ({
-            rowIndex: index + 2,
-            createdTime: row[this.config.CONTACT_FIELDS.TIME] || '',
-            name: row[this.config.CONTACT_FIELDS.NAME] || '',
-            company: row[this.config.CONTACT_FIELDS.COMPANY] || '',
-            position: row[this.config.CONTACT_FIELDS.POSITION] || '',
-            department: row[this.config.CONTACT_FIELDS.DEPARTMENT] || '',
-            phone: row[this.config.CONTACT_FIELDS.PHONE] || '',
-            mobile: row[this.config.CONTACT_FIELDS.MOBILE] || '',
-            email: row[this.config.CONTACT_FIELDS.EMAIL] || '',
-            website: row[this.config.CONTACT_FIELDS.WEBSITE] || '',
-            address: row[this.config.CONTACT_FIELDS.ADDRESS] || '',
-            confidence: row[this.config.CONTACT_FIELDS.CONFIDENCE] || '',
-            driveLink: row[this.config.CONTACT_FIELDS.DRIVE_LINK] || '',
-            status: row[this.config.CONTACT_FIELDS.STATUS] || '',
+            createdTime: parseDate(row[this.config.CONTACT_FIELDS.TIME]),
+            name: parseString(row[this.config.CONTACT_FIELDS.NAME]),
+            company: parseString(row[this.config.CONTACT_FIELDS.COMPANY]),
+            position: parseString(row[this.config.CONTACT_FIELDS.POSITION]),
+            department: parseString(row[this.config.CONTACT_FIELDS.DEPARTMENT]),
+            phone: parseString(row[this.config.CONTACT_FIELDS.PHONE]),
+            mobile: parseString(row[this.config.CONTACT_FIELDS.MOBILE]),
+            email: parseString(row[this.config.CONTACT_FIELDS.EMAIL]),
+            website: parseString(row[this.config.CONTACT_FIELDS.WEBSITE]),
+            address: parseString(row[this.config.CONTACT_FIELDS.ADDRESS]),
+            confidence: parseString(row[this.config.CONTACT_FIELDS.CONFIDENCE]),
+            driveLink: parseString(row[this.config.CONTACT_FIELDS.DRIVE_LINK]),
+            status: parseString(row[this.config.CONTACT_FIELDS.STATUS]),
             
-            // 【修正重點】讀取 LINE User ID，用於前端篩選 "我的名片"
-            lineUserId: row[this.config.CONTACT_FIELDS.LINE_USER_ID] || '',
+            // 用於前端篩選 "我的名片"
+            lineUserId: parseString(row[this.config.CONTACT_FIELDS.LINE_USER_ID]),
             
-            // 讀取使用者暱稱，用於前端顯示 "👤 Kevin"
-            userNickname: row[this.config.CONTACT_FIELDS.USER_NICKNAME] || ''
+            // 用於前端顯示 "👤 Kevin"
+            userNickname: parseString(row[this.config.CONTACT_FIELDS.USER_NICKNAME]),
+
+            // --- 內部中繼資料 ---
+            _meta: {
+                rowIndex: index + 2
+            }
         });
         
         const sorter = (a, b) => {
@@ -65,28 +73,45 @@ class ContactReader extends BaseReader {
 
     /**
      * 取得聯絡人總表 (已建檔聯絡人)
+     * @returns {Promise<Array<object>>}
      */
     async getContactList() {
         const cacheKey = 'contactList';
         const range = `${this.config.SHEETS.CONTACT_LIST}!A:M`;
 
-        const rowParser = (row) => ({
-            contactId: row[0] || '',
-            sourceId: row[1] || '',
-            name: row[2] || '',
-            companyId: row[3] || '',
-            department: row[4] || '',
-            position: row[5] || '',
-            mobile: row[6] || '',
-            phone: row[7] || '',
-            email: row[8] || '',
-            createdTime: row[9] || '',
-            lastUpdateTime: row[10] || '',
-            creator: row[11] || '',
-            lastModifier: row[12] || ''
+        const rowParser = (row, rowIndex) => ({
+            contactId: parseString(row[0]),
+            sourceId: parseString(row[1]),
+            name: parseString(row[2]),
+            companyId: parseString(row[3]),
+            department: parseString(row[4]),
+            position: parseString(row[5]),
+            mobile: parseString(row[6]),
+            phone: parseString(row[7]),
+            email: parseString(row[8]),
+            
+            createdTime: parseDate(row[9]),
+            lastUpdateTime: parseDate(row[10]),
+            creator: parseString(row[11]),
+            lastModifier: parseString(row[12]),
+
+            // --- 內部中繼資料 ---
+            _meta: {
+                rowIndex: rowIndex + 1 
+            }
         });
 
         return this._fetchAndCache(cacheKey, range, rowParser);
+    }
+
+    /**
+     * 透過 ID 查找已建檔聯絡人 (模擬 SQL: SELECT * FROM contacts WHERE id = ?)
+     * @param {string} contactId 
+     */
+    async findContactById(contactId) {
+        if (!contactId) return null;
+        const list = await this.getContactList();
+        return list.find(c => c.contactId === contactId) || null;
     }
     
     /**
@@ -97,12 +122,12 @@ class ContactReader extends BaseReader {
         const range = `${this.config.SHEETS.OPPORTUNITY_CONTACT_LINK}!A:F`;
 
         const rowParser = (row) => ({
-            linkId: row[this.config.OPP_CONTACT_LINK_FIELDS.LINK_ID] || '',
-            opportunityId: row[this.config.OPP_CONTACT_LINK_FIELDS.OPPORTUNITY_ID] || '',
-            contactId: row[this.config.OPP_CONTACT_LINK_FIELDS.CONTACT_ID] || '',
-            createTime: row[this.config.OPP_CONTACT_LINK_FIELDS.CREATE_TIME] || '',
-            status: row[this.config.OPP_CONTACT_LINK_FIELDS.STATUS] || '',
-            creator: row[this.config.OPP_CONTACT_LINK_FIELDS.CREATOR] || '',
+            linkId: parseString(row[this.config.OPP_CONTACT_LINK_FIELDS.LINK_ID]),
+            opportunityId: parseString(row[this.config.OPP_CONTACT_LINK_FIELDS.OPPORTUNITY_ID]),
+            contactId: parseString(row[this.config.OPP_CONTACT_LINK_FIELDS.CONTACT_ID]),
+            createTime: parseDate(row[this.config.OPP_CONTACT_LINK_FIELDS.CREATE_TIME]),
+            status: parseString(row[this.config.OPP_CONTACT_LINK_FIELDS.STATUS]),
+            creator: parseString(row[this.config.OPP_CONTACT_LINK_FIELDS.CREATOR]),
         });
 
         return this._fetchAndCache(cacheKey, range, rowParser);
@@ -112,10 +137,16 @@ class ContactReader extends BaseReader {
      * 根據機會 ID 取得關聯的聯絡人詳細資料
      */
     async getLinkedContacts(opportunityId) {
+        // 注意：此處依賴 getCompanyList (需確保有注入或 require)
+        // 為了避免循環依賴，這裡動態 require 或假設外部已處理，但 BaseReader 架構下通常建議外部傳入資料或透過 Service 組合
+        // 為保持相容性，這裡暫時保留 require CompanyReader 的方式，但在 Service 層組合會更好
+        const CompanyReader = require('./company-reader');
+        const companyReader = new CompanyReader(this.sheets);
+
         const [allLinks, allContacts, allCompanies, allPotentialContacts] = await Promise.all([
             this.getAllOppContactLinks(),
             this.getContactList(),
-            this.getCompanyList(), 
+            companyReader.getCompanyList(), 
             this.getContacts(9999)    
         ]);
 
@@ -161,7 +192,7 @@ class ContactReader extends BaseReader {
                     mobile: contact.mobile,
                     phone: contact.phone,
                     email: contact.email,
-                    companyName: companyNameMap.get(contact.companyId) || contact.companyId,
+                    companyName: companyName,
                     driveLink: driveLink 
                 };
             });
@@ -193,9 +224,13 @@ class ContactReader extends BaseReader {
      * 搜尋已建檔聯絡人並分頁
      */
     async searchContactList(query, page = 1) {
+        // 動態引入 CompanyReader 避免循環依賴問題
+        const CompanyReader = require('./company-reader'); 
+        const companyReader = new CompanyReader(this.sheets);
+        
         const [allContacts, allCompanies] = await Promise.all([
             this.getContactList(),
-            this.getCompanyList() 
+            companyReader.getCompanyList() 
         ]);
     
         const companyNameMap = new Map(allCompanies.map(c => [c.companyId, c.companyName]));
@@ -220,12 +255,6 @@ class ContactReader extends BaseReader {
             data: paginated,
             pagination: { current: page, total: Math.ceil(contacts.length / pageSize), totalItems: contacts.length, hasNext: (startIndex + pageSize) < contacts.length, hasPrev: page > 1 }
         };
-    }
-
-    async getCompanyList() {
-        const CompanyReader = require('./company-reader'); 
-        const companyReader = new CompanyReader(this.sheets);
-        return companyReader.getCompanyList();
     }
 }
 

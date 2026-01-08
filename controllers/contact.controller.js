@@ -1,4 +1,8 @@
 // controllers/contact.controller.js
+// [Version: 2026-01-08-Refactor-Stage2]
+// [Date: 2026-01-08]
+// Description: Contact Controller，已重構為使用 ContactService
+
 const { handleApiError } = require('../middleware/error.middleware');
 
 // 輔助函式：從 req.app 獲取服務
@@ -7,30 +11,29 @@ const getServices = (req) => req.app.get('services');
 // GET /api/contacts/dashboard
 exports.getDashboardData = async (req, res) => {
     try {
-        const { dashboardService } = getServices(req);
-        const data = await dashboardService.getContactsDashboardData();
-        // 【修正】必須包裹成 { success: true, data }，因為前端 contacts.js 會檢查 .success
+        const { contactService } = getServices(req);
+        // 透過 Service 獲取數據，並確保回傳 { success: true, data }
+        const data = await contactService.getDashboardData();
         res.json({ success: true, data });
     } catch (error) {
         handleApiError(res, error, 'Get Contacts Dashboard');
     }
 };
 
-// GET /api/contacts
+// GET /api/contacts (搜尋原始名片)
 exports.searchContacts = async (req, res) => {
     try {
-        const { contactReader } = getServices(req);
-        // ContactReader 已經回傳 { data: [...] } 結構，前端直接使用，因此這裡維持原樣不需包裹
-        res.json(await contactReader.searchContacts(req.query.q, parseInt(req.query.page || 1)));
+        const { contactService } = getServices(req);
+        // Service 回傳 { data: [...] }
+        res.json(await contactService.searchRawContacts(req.query.q, parseInt(req.query.page || 1)));
     } catch (error) { handleApiError(res, error, 'Search Contacts'); }
 };
 
-// GET /api/contact-list
+// GET /api/contact-list (搜尋標準聯絡人)
 exports.searchContactList = async (req, res) => {
     try {
-        const { contactReader } = getServices(req);
-        // 同上，Reader 已回傳正確結構
-        res.json(await contactReader.searchContactList(req.query.q, parseInt(req.query.page || 1)));
+        const { contactService } = getServices(req);
+        res.json(await contactService.searchContactList(req.query.q, parseInt(req.query.page || 1)));
     } catch (error) { handleApiError(res, error, 'Search Contact List'); }
 };
 
@@ -38,7 +41,7 @@ exports.searchContactList = async (req, res) => {
 exports.upgradeContact = async (req, res) => {
     try {
         const { workflowService } = getServices(req);
-        // WorkflowService 的回傳值通常已包含 success: true/false
+        // 升級流程屬於複雜 Workflow，仍由 WorkflowService 處理
         res.json(await workflowService.upgradeContactToOpportunity(parseInt(req.params.rowIndex), req.body, req.user.name));
     } catch (error) { handleApiError(res, error, 'Upgrade Contact'); }
 };
@@ -46,8 +49,9 @@ exports.upgradeContact = async (req, res) => {
 // PUT /api/contacts/:contactId
 exports.updateContact = async (req, res) => {
     try {
-        const { contactWriter } = getServices(req);
-        res.json(await contactWriter.updateContact(req.params.contactId, req.body, req.user.name));
+        const { contactService } = getServices(req);
+        // 使用 ContactService 進行更新 (含驗證)
+        res.json(await contactService.updateContact(req.params.contactId, req.body, req.user.name));
     } catch (error) { handleApiError(res, error, 'Update Contact'); }
 };
 

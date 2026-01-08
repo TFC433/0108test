@@ -1,4 +1,7 @@
 // data/contact-writer.js
+// [Version: 2026-01-08-Refactor-Stage2]
+// [Date: 2026-01-08]
+// Description: 負責寫入聯絡人資料，封裝標準聯絡人的 RowIndex 操作
 
 const BaseWriter = require('./base-writer');
 
@@ -18,14 +21,12 @@ class ContactWriter extends BaseWriter {
         this.contactReader = contactReader;
     }
 
-    // ... (保留 getOrCreateContact, updateContact, updateContactStatus 方法，不需更動) ...
-    // 請保留原檔案內容，並在最後新增 updateRawContact 方法
-
     /**
-     * 取得或建立一位聯絡人
+     * 取得或建立一位聯絡人 (標準聯絡人)
      */
     async getOrCreateContact(contactInfo, companyData, modifier) {
         const allContacts = await this.contactReader.getContactList();
+        // 這裡的邏輯假設同公司同名為同一人
         const existingContact = allContacts.find(c => c.name === contactInfo.name && c.companyId === companyData.id);
         
         if (existingContact) {
@@ -36,16 +37,27 @@ class ContactWriter extends BaseWriter {
         console.log(`👤 [ContactWriter] 建立新聯絡人: ${contactInfo.name} by ${modifier}`);
         const now = new Date().toISOString();
         const newContactId = `CON${Date.now()}`;
+        
+        // 使用傳入的 rowIndex (來自原始名片) 或 'MANUAL'
+        // 注意：contactInfo 可能是 DTO，rowIndex 在 _meta 中，或者來自其他來源
+        const sourceRef = contactInfo._meta && contactInfo._meta.rowIndex 
+            ? `BC-${contactInfo._meta.rowIndex}` 
+            : (contactInfo.rowIndex ? `BC-${contactInfo.rowIndex}` : 'MANUAL');
+
         const newRow = [
-            newContactId,
-            contactInfo.rowIndex ? `BC-${contactInfo.rowIndex}` : 'MANUAL',
-            contactInfo.name || '',
-            companyData.id,
-            contactInfo.department || '', contactInfo.position || '',
-            contactInfo.mobile || '', contactInfo.phone || '',
-            contactInfo.email || '',
-            now, now,
-            modifier, modifier
+            newContactId,                   // A: ID
+            sourceRef,                      // B: Source
+            contactInfo.name || '',         // C: Name
+            companyData.id,                 // D: CompanyID
+            contactInfo.department || '',   // E: Dept
+            contactInfo.position || '',     // F: Position
+            contactInfo.mobile || '',       // G: Mobile
+            contactInfo.phone || '',        // H: Phone
+            contactInfo.email || '',        // I: Email
+            now,                            // J: Created
+            now,                            // K: Updated
+            modifier,                       // L: Creator
+            modifier                        // M: Modifier
         ];
         
         await this.sheets.spreadsheets.values.append({
@@ -60,17 +72,23 @@ class ContactWriter extends BaseWriter {
     }
 
     /**
-     * 更新已建檔聯絡人資料
+     * 更新已建檔聯絡人資料 (封裝 RowIndex)
+     * @param {string} contactId - 聯絡人 ID
+     * @param {object} updateData - 要更新的欄位
+     * @param {string} modifier - 修改者
      */
     async updateContact(contactId, updateData, modifier) {
         console.log(`👤 [ContactWriter] 更新聯絡人資料: ${contactId} by ${modifier}`);
         const range = `${this.config.SHEETS.CONTACT_LIST}!A:M`;
+        
+        // 1. 使用 Reader 查找 Row (使用 ID 欄位，Index 0)
         const contactRow = await this.contactReader.findRowByValue(range, 0, contactId);
         if (!contactRow) throw new Error(`找不到聯絡人ID: ${contactId}`);
 
         const { rowIndex, rowData: currentRow } = contactRow;
         const now = new Date().toISOString();
         
+        // 2. 更新欄位 (Partial Update)
         if(updateData.sourceId !== undefined) currentRow[1] = updateData.sourceId;
         if(updateData.name !== undefined) currentRow[2] = updateData.name;
         if(updateData.companyId !== undefined) currentRow[3] = updateData.companyId;
@@ -80,9 +98,10 @@ class ContactWriter extends BaseWriter {
         if(updateData.phone !== undefined) currentRow[7] = updateData.phone;
         if(updateData.email !== undefined) currentRow[8] = updateData.email;
         
-        currentRow[10] = now; 
-        currentRow[12] = modifier; 
+        currentRow[10] = now; // LastUpdate
+        currentRow[12] = modifier; // Modifier
         
+        // 3. 寫回 Sheets
         await this.sheets.spreadsheets.values.update({
             spreadsheetId: this.config.SPREADSHEET_ID,
             range: `${this.config.SHEETS.CONTACT_LIST}!A${rowIndex}:M${rowIndex}`,
@@ -96,7 +115,7 @@ class ContactWriter extends BaseWriter {
     }
 
     /**
-     * 更新潛在客戶的狀態欄位
+     * 更新潛在客戶的狀態欄位 (依賴 rowIndex)
      */
     async updateContactStatus(rowIndex, status) {
         if (isNaN(parseInt(rowIndex)) || rowIndex <= 1) throw new Error(`無效的 rowIndex: ${rowIndex}`);
@@ -116,19 +135,19 @@ class ContactWriter extends BaseWriter {
     }
 
     /**
-     * 【新增】更新原始名片資料 (用於 LIFF 簡易編輯)
+     * 更新原始名片資料 (用於 LIFF 簡易編輯)
      * @param {number} rowIndex - 原始名片資料的列索引 (1-based)
-     * @param {object} updateData - 要更新的欄位 { name, company, position, mobile, email }
-     * @param {string} modifier - 修改者 (LINE 暱稱)
+     * @param {object} updateData - 要更新的欄位
+     * @param {string} modifier - 修改者
      */
     async updateRawContact(rowIndex, updateData, modifier) {
         if (isNaN(parseInt(rowIndex)) || rowIndex <= 1) throw new Error(`無效的 rowIndex: ${rowIndex}`);
         
         console.log(`📝 [ContactWriter] LIFF 更新原始名片 - Row: ${rowIndex} by ${modifier}`);
         
-        // 讀取整列資料以確保不覆蓋其他未修改的欄位
         const range = `${this.config.SHEETS.CONTACTS}!A${rowIndex}:Y${rowIndex}`;
         
+        // 先讀取以保留未修改欄位
         const response = await this.sheets.spreadsheets.values.get({
             spreadsheetId: this.config.SPREADSHEET_ID,
             range: range,
@@ -139,15 +158,14 @@ class ContactWriter extends BaseWriter {
 
         const F = this.config.CONTACT_FIELDS;
 
-        // 更新對應欄位 (如果 updateData 有提供)
+        // 更新對應欄位
         if (updateData.name !== undefined) currentRow[F.NAME] = updateData.name;
         if (updateData.company !== undefined) currentRow[F.COMPANY] = updateData.company;
         if (updateData.position !== undefined) currentRow[F.POSITION] = updateData.position;
         if (updateData.mobile !== undefined) currentRow[F.MOBILE] = updateData.mobile;
         if (updateData.email !== undefined) currentRow[F.EMAIL] = updateData.email;
         
-        // 此處不覆蓋原始建立者，僅更新內容
-
+        // 寫回
         await this.sheets.spreadsheets.values.update({
             spreadsheetId: this.config.SPREADSHEET_ID,
             range: range,
@@ -155,7 +173,6 @@ class ContactWriter extends BaseWriter {
             resource: { values: [currentRow] }
         });
 
-        // 清除快取，讓前端能看到更新
         this.contactReader.invalidateCache('contacts');
         
         console.log('✅ [ContactWriter] 原始名片資料更新成功');
