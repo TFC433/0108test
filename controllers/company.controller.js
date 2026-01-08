@@ -1,32 +1,31 @@
 // controllers/company.controller.js
-const { handleApiError } = require('../middleware/error.middleware');
+// [Version: 2026-01-08-Refactor-Stage1]
+// [Date: 2026-01-08]
+// Description: Company Controller，標準介面層
 
-// 輔助函式：從 req.app 獲取服務
+const { handleApiError } = require('../middleware/error.middleware');
 const getServices = (req) => req.app.get('services');
 
-// GET /api/companies/dashboard
 exports.getDashboardData = async (req, res) => {
     try {
         const { dashboardService } = getServices(req);
-        const data = await dashboardService.getCompaniesDashboardData();
-        res.json(data);
+        // Controller 不做運算，直接轉發
+        res.json(await dashboardService.getCompaniesDashboardData());
     } catch (error) {
         handleApiError(res, error, 'Get Companies Dashboard');
     }
 };
 
-// GET /api/companies
 exports.getCompanies = async (req, res) => {
     try {
         const { companyService } = getServices(req);
-        const sortedCompanies = await companyService.getCompanyListWithActivity();
-        res.json({ success: true, data: sortedCompanies });
+        const data = await companyService.getCompanyListWithActivity();
+        res.json({ success: true, data });
     } catch (error) {
         handleApiError(res, error, 'Get Companies');
     }
 };
 
-// 【快速新增】建立公司
 exports.createCompany = async (req, res) => {
     try {
         const { companyService } = getServices(req);
@@ -36,37 +35,38 @@ exports.createCompany = async (req, res) => {
             return res.status(400).json({ success: false, error: 'Company name is required' });
         }
         
-        // 呼叫 Service 進行建立
+        // 傳入 user.name 供紀錄
         const result = await companyService.createCompany(companyName, req.user.name);
-        
-        // 直接回傳 Service 的結果
         res.json(result);
     } catch (error) {
         handleApiError(res, error, 'Create Company');
     }
 };
 
-// GET /api/companies/:companyName/details
 exports.getCompanyDetails = async (req, res) => {
     try {
         const { companyService } = getServices(req);
-        res.json({ success: true, data: await companyService.getCompanyDetails(decodeURIComponent(req.params.companyName)) });
+        // decodeURIComponent 處理 URL 中文編碼
+        const companyName = decodeURIComponent(req.params.companyName);
+        const data = await companyService.getCompanyDetails(companyName);
+        res.json({ success: true, data });
     } catch (error) {
         handleApiError(res, error, 'Get Company Details');
     }
 };
 
-// PUT /api/companies/:companyName
 exports.updateCompany = async (req, res) => {
     try {
         const { companyService } = getServices(req);
-        res.json(await companyService.updateCompany(decodeURIComponent(req.params.companyName), req.body, req.user.name));
+        const companyName = decodeURIComponent(req.params.companyName);
+        // 直接將 body 傳給 service，不做額外處理
+        const result = await companyService.updateCompany(companyName, req.body, req.user.name);
+        res.json(result);
     } catch (error) {
         handleApiError(res, error, 'Update Company');
     }
 };
 
-// DELETE /api/companies/:companyName
 exports.deleteCompany = async (req, res) => {
     try {
         const { companyService } = getServices(req);
@@ -74,11 +74,6 @@ exports.deleteCompany = async (req, res) => {
         const result = await companyService.deleteCompany(companyName, req.user.name);
         res.json(result);
     } catch (error) {
-        if (error.message.startsWith('無法刪除：')) {
-            console.warn(`[Delete Company] Business logic error: ${error.message}`);
-            res.status(400).json({ success: false, error: error.message, details: error.message });
-        } else {
-            handleApiError(res, error, 'Delete Company');
-        }
+        handleApiError(res, error, 'Delete Company');
     }
 };

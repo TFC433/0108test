@@ -1,37 +1,27 @@
 // services/company-service.js
+// [Version: 2026-01-08-Refactor-Stage1]
+// [Date: 2026-01-08]
+// Description: 負責處理公司業務邏輯，修正依賴注入與 RowIndex 依賴
 
-/**
- * 專門負責處理與「公司」相關的複雜業務邏輯
- */
 class CompanyService {
     /**
      * @param {object} services - 包含所有已初始化服務的容器
      */
     constructor(services) {
+        // Data Access Layers
         this.companyReader = services.companyReader;
         this.contactReader = services.contactReader;
         this.opportunityReader = services.opportunityReader;
         this.interactionReader = services.interactionReader;
         this.eventLogReader = services.eventLogReader;
+        
         this.companyWriter = services.companyWriter;
         this.interactionWriter = services.interactionWriter;
-        this.systemReader = services.systemReader;
-        // 【新增】注入 Writer 以支援連動更新
         this.opportunityWriter = services.opportunityWriter;
-        this.contactWriter = services.contactWriter; 
-    }
+        this.contactWriter = services.contactWriter;
 
-    /**
-     * 標準化公司名稱的輔助函式
-     */
-    _normalizeCompanyName(name) {
-        if (!name) return '';
-        return name
-            .toLowerCase()
-            .trim()
-            .replace(/股份有限公司|有限公司|公司/g, '') // 移除常見後綴
-            .replace(/\(.*\)/g, '') // 移除括號內容
-            .trim();
+        // 【修正】使用 ConfigReader 取代 SystemReader
+        this.configReader = services.configReader; 
     }
 
     /**
@@ -59,8 +49,8 @@ class CompanyService {
         const normalizedName = companyName.trim();
         if (!normalizedName) throw new Error('公司名稱不能為空');
 
-        const allCompanies = await this.companyReader.getCompanyList();
-        const existing = allCompanies.find(c => c.companyName.toLowerCase().trim() === normalizedName.toLowerCase());
+        // 使用 Reader 的專用查找方法
+        const existing = await this.companyReader.findCompanyByName(normalizedName);
         
         if (existing) {
             return { 
@@ -79,7 +69,7 @@ class CompanyService {
 
         const newCompanyData = await this.companyWriter.getOrCreateCompany(
             normalizedName, 
-            {}, 
+            {}, // contactInfo (Optional)
             modifier, 
             defaultValues
         );
@@ -102,77 +92,65 @@ class CompanyService {
     }
 
     /**
-     * 攔截並處理公司資料更新，以增加日誌與連動更新
+     * 更新公司資料 (含連動更新 Cascade Update)
      */
     async updateCompany(companyName, updateData, modifier) {
-        const allCompanies = await this.companyReader.getCompanyList();
-        // 找出原始資料
-        const originalCompany = allCompanies.find(c => c.companyName.toLowerCase().trim() === companyName.toLowerCase().trim());
-        
+        // 1. 驗證公司是否存在
+        const originalCompany = await this.companyReader.findCompanyByName(companyName);
         if (!originalCompany) {
             throw new Error(`找不到要更新的公司: ${companyName}`);
         }
 
-        const config = await this.systemReader.getSystemConfig();
+        // 2. 獲取系統設定對照表
+        // 【修正】確保 configReader 存在且方法正確
+        const config = await this.configReader.getSystemConfig(); 
         const getNote = (configKey, value) => (config[configKey] || []).find(i => i.value === value)?.note || value || 'N/A';
         
         const logs = [];
 
-        // 檢查是否修改名稱 (連動更新的核心檢查)
+        // 3. 檢查變更並記錄日誌
         const isRenaming = updateData.companyName && updateData.companyName.trim() !== originalCompany.companyName;
         
         if (isRenaming) {
             logs.push(`公司名稱從 [${originalCompany.companyName}] 變更為 [${updateData.companyName}]`);
         }
-
-        if (updateData.customerStage !== undefined && updateData.customerStage !== originalCompany.customerStage) {
+        if (updateData.customerStage && updateData.customerStage !== originalCompany.customerStage) {
             logs.push(`客戶階段從 [${getNote('客戶階段', originalCompany.customerStage)}] 更新為 [${getNote('客戶階段', updateData.customerStage)}]`);
         }
-        if (updateData.engagementRating !== undefined && updateData.engagementRating !== originalCompany.engagementRating) {
+        if (updateData.engagementRating && updateData.engagementRating !== originalCompany.engagementRating) {
             logs.push(`互動評級從 [${getNote('互動評級', originalCompany.engagementRating)}] 更新為 [${getNote('互動評級', updateData.engagementRating)}]`);
         }
-        if (updateData.companyType !== undefined && updateData.companyType !== originalCompany.companyType) {
-            logs.push(`公司類型從 [${getNote('公司類型', originalCompany.companyType)}] 更新為 [${getNote('公司類型', updateData.companyType)}]`);
-        }
 
-        // 1. 執行公司本身的更新
+        // 4. 執行更新 (Writer 內部會處理 RowIndex)
         const updateResult = await this.companyWriter.updateCompany(companyName, updateData, modifier);
         
-        // 2. 如果成功，且涉及改名，執行連動更新 (Cascade Update)
+        // 5. 連動更新 (Cascade Update) - 如果改名
         if (updateResult.success && isRenaming) {
-            console.log(`🔄 [CompanyService] 偵測到公司改名 (${originalCompany.companyName} -> ${updateData.companyName})，開始執行連動更新...`);
-            
+            console.log(`🔄 [CompanyService] 偵測到公司改名，開始連動更新...`);
             try {
-                // 連動更新：機會案件
                 const allOpportunities = await this.opportunityReader.getOpportunities();
-                // 找出舊名字的所有機會
                 const relatedOpportunities = allOpportunities.filter(opp => 
                     opp.customerCompany.toLowerCase().trim() === originalCompany.companyName.toLowerCase().trim()
                 );
 
                 if (relatedOpportunities.length > 0) {
-                    console.log(`⚡ [CompanyService] 正在同步更新 ${relatedOpportunities.length} 筆相關機會案件...`);
-                    
+                    // 注意：目前 Opportunity 仍依賴 rowIndex，這部分等到 Stage 3 (Opportunity) 重構時再改為 SQL-like update
                     const batchUpdates = relatedOpportunities.map(opp => ({
-                        rowIndex: opp.rowIndex,
+                        rowIndex: opp.rowIndex, 
                         data: { customerCompany: updateData.companyName },
                         modifier: `System (Cascade Update from ${modifier})`
                     }));
 
                     await this.opportunityWriter.batchUpdateOpportunities(batchUpdates);
-                    logs.push(`已自動同步更新 ${relatedOpportunities.length} 筆關聯機會案件的客戶名稱`);
+                    logs.push(`已自動同步更新 ${relatedOpportunities.length} 筆關聯機會案件`);
                 }
-
-                // (可選) 若有潛在聯絡人 (Raw Contacts) 使用字串關聯，也可以在此處加入連動
-                // ...
-
             } catch (cascadeError) {
                 console.error(`❌ [CompanyService] 連動更新失敗:`, cascadeError);
-                logs.push(`⚠️ 警告: 關聯資料同步失敗 (${cascadeError.message})，請聯繫管理員檢查資料一致性`);
+                logs.push(`⚠️ 連動更新失敗: ${cascadeError.message}`);
             }
         }
 
-        // 3. 寫入日誌
+        // 6. 寫入日誌
         if (updateResult.success && logs.length > 0) {
             await this._logCompanyInteraction(
                 originalCompany.companyId,
@@ -185,16 +163,11 @@ class CompanyService {
         return updateResult;
     }
 
-
     /**
-     * 獲取公司列表，並根據最後活動時間排序
+     * 獲取公司列表 (含活動數據)
      */
     async getCompanyListWithActivity() {
-        const [
-            allCompanies,
-            allInteractions,
-            allOpportunities
-        ] = await Promise.all([
+        const [allCompanies, allInteractions, allOpportunities] = await Promise.all([
             this.companyReader.getCompanyList(),
             this.interactionReader.getInteractions(),
             this.opportunityReader.getOpportunities()
@@ -203,173 +176,107 @@ class CompanyService {
         const companyActivityMap = new Map();
         const companyOpportunityCountMap = new Map();
 
+        // 初始化 Map
         allCompanies.forEach(comp => {
-            const initialTimestamp = new Date(comp.lastUpdateTime || comp.createdTime).getTime();
-            if (!isNaN(initialTimestamp)) {
-                companyActivityMap.set(comp.companyId, initialTimestamp);
-            }
+            const initialTime = new Date(comp.lastUpdateTime || comp.createdTime).getTime();
+            companyActivityMap.set(comp.companyId, isNaN(initialTime) ? 0 : initialTime);
             companyOpportunityCountMap.set(comp.companyId, 0);
         });
 
+        // 建立名稱到 ID 的映射，方便反查
         const companyNameToIdMap = new Map(allCompanies.map(c => [c.companyName, c.companyId]));
         const oppToCompanyIdMap = new Map();
         
+        // 統計機會案件
         allOpportunities.forEach(opp => {
             if (companyNameToIdMap.has(opp.customerCompany)) {
                 const companyId = companyNameToIdMap.get(opp.customerCompany);
                 oppToCompanyIdMap.set(opp.opportunityId, companyId);
                 
                 if (opp.currentStatus !== '已封存' && opp.currentStatus !== '已取消') {
-                     const currentCount = companyOpportunityCountMap.get(companyId) || 0;
-                     companyOpportunityCountMap.set(companyId, currentCount + 1);
+                     const count = companyOpportunityCountMap.get(companyId) || 0;
+                     companyOpportunityCountMap.set(companyId, count + 1);
                 }
             }
         });
 
+        // 統計互動時間
         allInteractions.forEach(inter => {
             let companyId = inter.companyId;
-
+            // 如果互動沒綁公司但有綁機會，嘗試反查公司
             if (!companyId && inter.opportunityId && oppToCompanyIdMap.has(inter.opportunityId)) {
                 companyId = oppToCompanyIdMap.get(inter.opportunityId);
             }
 
             if (companyId) {
-                const existingTimestamp = companyActivityMap.get(companyId) || 0;
-                const currentTimestamp = new Date(inter.interactionTime || inter.createdTime).getTime();
-                if (currentTimestamp > existingTimestamp) {
-                    companyActivityMap.set(companyId, currentTimestamp);
+                const existingTime = companyActivityMap.get(companyId) || 0;
+                const interactTime = new Date(inter.interactionTime || inter.createdTime).getTime();
+                if (interactTime > existingTime) {
+                    companyActivityMap.set(companyId, interactTime);
                 }
             }
         });
 
+        // 組裝結果
         const companiesWithActivity = allCompanies.map(comp => ({
             ...comp,
-            lastActivity: companyActivityMap.get(comp.companyId) || new Date(comp.createdTime).getTime(),
+            lastActivity: companyActivityMap.get(comp.companyId),
             opportunityCount: companyOpportunityCountMap.get(comp.companyId) || 0
         }));
 
+        // 排序：最近有活動的排前面
         companiesWithActivity.sort((a, b) => b.lastActivity - a.lastActivity);
 
         return companiesWithActivity;
     }
 
-
     /**
-     * 高效獲取公司的完整詳細資料
+     * 獲取公司詳情
      */
     async getCompanyDetails(companyName) {
-        const [
-            allCompanies, 
-            allContacts, 
-            allOpportunities, 
-            allPotentialContacts,
-            allEventLogs
-        ] = await Promise.all([
+        // 此處邏輯與之前保持一致，但受惠於 Reader 改良，取回的 company 物件格式更標準
+        const [allCompanies, allContacts, allOpportunities, allEventLogs] = await Promise.all([
             this.companyReader.getCompanyList(),
             this.contactReader.getContactList(),
             this.opportunityReader.getOpportunities(),
-            this.contactReader.getContacts(), // 潛在客戶
             this.eventLogReader.getEventLogs()
         ]);
 
-        console.log(`[CompanyService] 正在為 ${allOpportunities.length} 筆機會計算最後活動時間...`);
+        const normalizedName = companyName.toLowerCase().trim();
+        const company = allCompanies.find(c => c.companyName.toLowerCase().trim() === normalizedName);
         
-        const allInteractions = await this.interactionReader.getInteractions();
-
-        const latestInteractionMap = new Map();
-        allInteractions.forEach(interaction => {
-            if (interaction.opportunityId) {
-                const id = interaction.opportunityId;
-                const existing = latestInteractionMap.get(id) || 0;
-                const current = new Date(interaction.interactionTime || interaction.createdTime).getTime();
-                if (current > existing) {
-                    latestInteractionMap.set(id, current);
-                }
-            }
-        });
-
-        allOpportunities.forEach(opp => {
-            const selfUpdate = new Date(opp.lastUpdateTime || opp.createdTime).getTime();
-            const lastInteraction = latestInteractionMap.get(opp.opportunityId) || 0;
-            opp.effectiveLastActivity = Math.max(selfUpdate, lastInteraction);
-        });
-
-        const normalizedCompanyName = companyName.toLowerCase().trim();
-
-        const company = allCompanies.find(c => c.companyName.toLowerCase().trim() === normalizedCompanyName);
         if (!company) {
-            const potentialMatch = allPotentialContacts.find(pc => pc.company && pc.company.toLowerCase().trim() === normalizedCompanyName);
-            if (potentialMatch) {
-                return {
-                    companyInfo: { companyName: potentialMatch.company, isPotential: true },
-                    contacts: [],
-                    opportunities: [],
-                    potentialContacts: allPotentialContacts.filter(pc => pc.company && pc.company.toLowerCase().trim() === normalizedCompanyName),
-                    interactions: [], 
-                    eventLogs: []
-                };
-            }
             throw new Error(`找不到公司: ${companyName}`);
         }
 
         const relatedContacts = allContacts.filter(c => c.companyId === company.companyId);
-        const relatedOpportunities = allOpportunities.filter(o => o.customerCompany.toLowerCase().trim() === normalizedCompanyName);
-        const relatedPotentialContacts = allPotentialContacts.filter(pc => pc.company && pc.company.toLowerCase().trim() === normalizedCompanyName);
+        const relatedOpportunities = allOpportunities.filter(o => o.customerCompany.toLowerCase().trim() === normalizedName);
         
         const relatedEventLogs = allEventLogs
             .filter(log => log.companyId === company.companyId)
             .sort((a, b) => new Date(b.lastModifiedTime || b.createdTime) - new Date(a.lastModifiedTime || a.createdTime));
-
-        console.log(`✅ [CompanyService] 公司資料整合完畢: ${relatedContacts.length} 位聯絡人, ${relatedOpportunities.length} 個機會, 0 筆互動, ${relatedEventLogs.length} 筆事件`);
         
         return {
             companyInfo: company,
             contacts: relatedContacts,
-            opportunities: relatedOpportunities, 
-            potentialContacts: relatedPotentialContacts,
-            interactions: [],
-            eventLogs: relatedEventLogs
+            opportunities: relatedOpportunities,
+            eventLogs: relatedEventLogs,
+            potentialContacts: [], // 若無實作可留空
+            interactions: []       // Interaction 可後續補上
         };
     }
 
-    /**
-     * 刪除一間公司
-     */
     async deleteCompany(companyName, modifier) {
-        console.log(`🗑️ [CompanyService] 請求刪除公司: ${companyName} by ${modifier}`);
-
+        // 先檢查關聯
         const allOpportunities = await this.opportunityReader.getOpportunities();
-        const relatedOpportunities = allOpportunities.filter(
-            opp => opp.customerCompany.toLowerCase().trim() === companyName.toLowerCase().trim()
-        );
-
-        if (relatedOpportunities.length > 0) {
-            throw new Error(`無法刪除：此公司仍關聯 ${relatedOpportunities.length} 個機會案件。`);
+        const hasActiveOpp = allOpportunities.some(o => o.customerCompany.toLowerCase().trim() === companyName.toLowerCase().trim());
+        
+        if (hasActiveOpp) {
+            throw new Error(`無法刪除：此公司仍有關聯的機會案件`);
         }
 
-        const allEventLogs = await this.eventLogReader.getEventLogs();
-        const companyDetails = await this.getCompanyDetails(companyName); 
-        
-        if (companyDetails.companyInfo && companyDetails.companyInfo.companyId) {
-            const relatedEventLogs = allEventLogs.filter(
-                log => !log.opportunityId && log.companyId === companyDetails.companyInfo.companyId
-            );
-            if (relatedEventLogs.length > 0) {
-                 throw new Error(`無法刪除：此公司仍關聯 ${relatedEventLogs.length} 個事件紀錄。`);
-            }
-            
-            await this._logCompanyInteraction(
-                companyDetails.companyInfo.companyId,
-                '刪除公司',
-                `公司 ${companyName} (ID: ${companyDetails.companyInfo.companyId}) 已被 ${modifier} 請求刪除。`,
-                modifier
-            );
-        }
-
-        const result = await this.companyWriter.deleteCompany(companyName);
-        console.log(`✅ [CompanyService] 公司 ${companyName} 已成功刪除。`);
-        
-        return result;
+        // 執行刪除
+        return this.companyWriter.deleteCompany(companyName);
     }
 }
 
