@@ -156,6 +156,30 @@ class OpportunityService {
     }
 
     /**
+     * 依縣市統計機會案件
+     * (Delegated to Reader)
+     */
+    async getOpportunitiesByCounty(opportunityType = null) {
+        return this.opportunityReader.getOpportunitiesByCounty(opportunityType);
+    }
+
+    /**
+     * 搜尋機會案件
+     * (Delegated to Reader)
+     */
+    async searchOpportunities(q, page, filters) {
+        return this.opportunityReader.searchOpportunities(q, page, filters);
+    }
+
+    /**
+     * 批量儲存 (更新/新增)
+     * (Delegated to Writer)
+     */
+    async saveBatch(items, user) {
+        return this.opportunityWriter.saveBatch(items, user);
+    }
+
+    /**
      * 更新機會案件，並自動新增多種互動紀錄
      */
     async updateOpportunity(rowIndex, updateData, modifier) {

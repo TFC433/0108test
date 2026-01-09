@@ -115,10 +115,23 @@ class OpportunityWriter extends BaseWriter {
         return { success: true, data: { rowIndex, ...updateData } };
     }
 
-    async batchUpdateOpportunities(updates) {
-        console.log('📝 [OpportunityWriter] 執行高效批量更新機會案件...');
+    /**
+     * 高效批量儲存 (支援更新)
+     * 遵循 Stage 3-4 Canon: saveBatch(items, user)
+     */
+    async saveBatch(items, user) {
+        if (!items || !Array.isArray(items) || items.length === 0) {
+            return { updated: 0, appended: 0 };
+        }
+
+        // 為了相容前端可能傳來的結構 (updates 陣列包含 rowIndex)，我們做一次正規化
+        // 假設 items 是 [{ rowIndex, data: {...}, modifier }] 或是 [{ rowIndex, ...fields }]
+        // 這裡主要針對「更新」情境優化 (Based on ChipWall/Kanban logic)
+
+        console.log(`📝 [OpportunityWriter] 執行高效批量儲存 (Items: ${items.length})...`);
         const FIELD_NAMES = this.config.OPPORTUNITY_FIELD_NAMES;
         
+        // 1. 取得標題對照表 (Header Map)
         const headerRange = `${this.config.SHEETS.OPPORTUNITIES}!A1:ZZ1`;
         const headerResponse = await this.sheets.spreadsheets.values.get({
             spreadsheetId: this.config.SPREADSHEET_ID, range: headerRange
@@ -128,50 +141,80 @@ class OpportunityWriter extends BaseWriter {
         headerValues.forEach((title, index) => { if(title) map[title.trim()] = index; });
 
         const now = new Date().toISOString();
+        const modifierName = user ? (user.name || user) : 'System';
 
-        const data = await Promise.all(updates.map(async (update) => {
-            const range = `${this.config.SHEETS.OPPORTUNITIES}!A${update.rowIndex}:ZZ${update.rowIndex}`;
-            const response = await this.sheets.spreadsheets.values.get({ spreadsheetId: this.config.SPREADSHEET_ID, range });
-            const currentRow = response.data.values ? response.data.values[0] : [];
+        // 2. 準備更新資料 (Batch Prepare)
+        // [N+1 Optimization] 一次性讀取所有資料，避免迴圈內讀取
+
+        console.log('[OpportunityWriter] 預先讀取 Sheet 資料以避免 N+1...');
+        const allDataResponse = await this.sheets.spreadsheets.values.get({
+            spreadsheetId: this.config.SPREADSHEET_ID,
+            range: `${this.config.SHEETS.OPPORTUNITIES}!A:ZZ`, // 讀取整張表
+        });
+        const allRows = allDataResponse.data.values || [];
+
+        const preparedData = items.map((item) => {
+            // 相容前端傳來的結構: { rowIndex, data: {...} } 或直接 { rowIndex, ... }
+            const rowIndex = item.rowIndex || (item.data && item.data.rowIndex);
+            const updateData = item.data || item;
             
-            if (currentRow.length === 0) return null;
+            if (!rowIndex) {
+                console.warn('[OpportunityWriter] 批量更新略過無 rowIndex 的項目');
+                return null;
+            }
+
+            // 直接從記憶體中獲取 Row (rowIndex 是 1-based, array 是 0-based)
+            const arrayIndex = rowIndex - 1;
+            let currentRow = allRows[arrayIndex] ? [...allRows[arrayIndex]] : [];
+            
+            // 如果該行不存在或為空，視為錯誤 (因為是更新操作)
+            if (currentRow.length === 0) {
+                 console.warn(`[OpportunityWriter] 找不到 Row ${rowIndex} 的資料，略過更新`);
+                 return null;
+            }
+
+            // 補齊長度
             while (currentRow.length < headerValues.length) currentRow.push('');
 
-            const { data: updateData, modifier } = update;
-            
             const setVal = (key, val) => {
                 const idx = map[key];
                 if (idx !== undefined && idx >= 0) currentRow[idx] = val;
             };
 
-            // 【修改】擴充支援的批量更新欄位
+            // 根據傳入欄位進行更新 (支援常用的批量更新欄位)
             if (updateData.currentStage !== undefined) setVal(FIELD_NAMES.STAGE, updateData.currentStage);
             if (updateData.stageHistory !== undefined) setVal(FIELD_NAMES.HISTORY, updateData.stageHistory);
-            // 支援更新客戶名稱 (for cascade update)
             if (updateData.customerCompany !== undefined) setVal(FIELD_NAMES.CUSTOMER, updateData.customerCompany);
+            if (updateData.opportunityName !== undefined) setVal(FIELD_NAMES.NAME, updateData.opportunityName);
+            if (updateData.opportunityType !== undefined) setVal(FIELD_NAMES.TYPE, updateData.opportunityType);
+            if (updateData.assignee !== undefined) setVal(FIELD_NAMES.ASSIGNEE, updateData.assignee);
 
             setVal(FIELD_NAMES.LAST_UPDATE_TIME, now);
-            setVal(FIELD_NAMES.LAST_MODIFIER, modifier);
+            setVal(FIELD_NAMES.LAST_MODIFIER, modifierName);
             
-            return { range, values: [currentRow] };
-        }));
-
-        const validData = data.filter(d => d !== null);
-        if (validData.length === 0) {
-            return { success: true, successCount: 0, failCount: updates.length };
-        }
-
-        await this.sheets.spreadsheets.values.batchUpdate({
-            spreadsheetId: this.config.SPREADSHEET_ID,
-            resource: {
-                valueInputOption: 'USER_ENTERED',
-                data: validData
-            }
+            return {
+                range: `${this.config.SHEETS.OPPORTUNITIES}!A${rowIndex}:ZZ${rowIndex}`,
+                values: [currentRow]
+            };
         });
 
+        const validUpdates = preparedData.filter(d => d !== null);
+
+        if (validUpdates.length > 0) {
+            await this.sheets.spreadsheets.values.batchUpdate({
+                spreadsheetId: this.config.SPREADSHEET_ID,
+                resource: {
+                    valueInputOption: 'USER_ENTERED',
+                    data: validUpdates
+                }
+            });
+        }
+
         this.opportunityReader.invalidateCache('opportunities');
-        console.log(`✅ [OpportunityWriter] 批量更新完成`);
-        return { success: true, successCount: validData.length, failCount: updates.length - validData.length };
+        console.log(`✅ [OpportunityWriter] 批量儲存完成: 更新 ${validUpdates.length} 筆`);
+
+        // 回傳格式符合 Canon (ProductWriter)
+        return { updated: validUpdates.length, appended: 0 };
     }
     
     async deleteOpportunity(rowIndex, modifier) {
