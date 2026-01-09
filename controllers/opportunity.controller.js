@@ -13,18 +13,18 @@ exports.getDashboardData = async (req, res) => {
 
 exports.getOpportunitiesByCounty = async (req, res) => {
     try {
-        const { opportunityReader } = getServices(req);
-        res.json(await opportunityReader.getOpportunitiesByCounty(req.query.opportunityType));
+        const { opportunityService } = getServices(req);
+        res.json(await opportunityService.getOpportunitiesByCounty(req.query.opportunityType));
     } catch (error) { handleApiError(res, error, 'Opp By County'); }
 };
 
 exports.searchOpportunities = async (req, res) => {
     try {
-        const { opportunityReader } = getServices(req);
+        const { opportunityService } = getServices(req);
         const { q, page = 0, assignee, type, stage } = req.query;
         const filters = { assignee, type, stage };
         Object.keys(filters).forEach(key => (filters[key] === undefined || filters[key] === '') && delete filters[key]);
-        res.json(await opportunityReader.searchOpportunities(q, parseInt(page), filters));
+        res.json(await opportunityService.searchOpportunities(q, parseInt(page), filters));
     } catch (error) { handleApiError(res, error, 'Search Opps'); }
 };
 
@@ -52,8 +52,23 @@ exports.updateOpportunity = async (req, res) => {
 
 exports.batchUpdateOpportunities = async (req, res) => {
     try {
-        const { opportunityWriter } = getServices(req);
-        res.json(await opportunityWriter.batchUpdateOpportunities(req.body.updates));
+        const { opportunityService } = getServices(req);
+
+        // Frontend sends: { updates: [{ rowIndex, data, modifier }] }
+        const updates = req.body.updates || [];
+
+        // Call Service.saveBatch(items, user)
+        // returns { updated: N, appended: M }
+        const result = await opportunityService.saveBatch(updates, req.user);
+
+        // Transform response to match frontend expectation (Legacy format)
+        // Expected: { success: true, successCount: N, failCount: M }
+        res.json({
+            success: true,
+            successCount: result.updated + result.appended,
+            failCount: updates.length - (result.updated + result.appended),
+            details: result
+        });
     } catch (error) { handleApiError(res, error, 'Batch Update Opps'); }
 };
 
