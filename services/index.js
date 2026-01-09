@@ -1,42 +1,43 @@
 // services/index.js
-// [Version: 2026-01-08-Refactor-Stage3]
+// [Version: 2026-01-08-Refactor-Stage4]
 // [Date: 2026-01-08]
-// Description: 註冊 ProductService，完成 Stage 3 重構
+// Description: 加入 InteractionService 並完成依賴注入
 
 const config = require('../config');
 const DashboardService = require('./dashboard-service');
 const OpportunityService = require('./opportunity-service');
 const CompanyService = require('./company-service');
 const ContactService = require('./contact-service');
-const ProductService = require('./product-service'); // ✅ 新增引入
+const ProductService = require('./product-service');
+const InteractionService = require('./interaction-service'); // ✅ 新增
 const EventLogService = require('./event-log-service');
 const WeeklyBusinessService = require('./weekly-business-service');
 const SalesAnalysisService = require('./sales-analysis-service');
 const dateHelpers = require('../utils/date-helpers');
 
 function initializeBusinessServices(coreServices) {
-    // Debug: 檢查核心服務
-    console.log('🔍 [BusinessServices] 接收核心服務, configReader:', !!coreServices.configReader);
+    console.log('🔍 [BusinessServices] 初始化業務服務層...');
 
-    // 將 config 和 dateHelpers 加入核心服務
     const servicesWithUtils = { ...coreServices, config, dateHelpers };
 
-    // 1. 實例化服務 (注意順序)
+    // 1. 實例化服務
     const contactService = new ContactService(servicesWithUtils);
     const opportunityService = new OpportunityService(servicesWithUtils);
     const companyService = new CompanyService(servicesWithUtils);
-    const productService = new ProductService(servicesWithUtils); // ✅ 實例化 ProductService
+    const productService = new ProductService(servicesWithUtils);
+    const interactionService = new InteractionService(servicesWithUtils); // ✅ 實例化
     const eventLogService = new EventLogService(servicesWithUtils);
     const weeklyBusinessService = new WeeklyBusinessService(servicesWithUtils);
     const salesAnalysisService = new SalesAnalysisService(servicesWithUtils);
 
-    // 2. 準備包含所有服務的物件 (供 Dashboard 使用)
+    // 2. 準備服務容器
     const allInitializedServices = {
         ...servicesWithUtils,
         contactService,
         opportunityService,
         companyService,
-        productService, // ✅ 加入列表供 Dashboard 使用
+        productService,
+        interactionService, // ✅ 加入容器
         eventLogService,
         weeklyBusinessService,
         salesAnalysisService
@@ -45,35 +46,30 @@ function initializeBusinessServices(coreServices) {
     // 3. 實例化 DashboardService
     const dashboardService = new DashboardService(allInitializedServices);
 
-    // 4. 解決循環依賴 (依賴注入修補)
+    // 4. 解決循環依賴與反向注入
     contactService.dashboardService = dashboardService;
-    
-    // 若 ProductService 未來需要呼叫 Dashboard，也可在此修補
     productService.dashboardService = dashboardService;
+    // InteractionService 不需要反向注入 Dashboard，但如果有其他依賴可在此處理
 
-    console.log('✅ [Service Container] 所有業務服務 (含 ProductService) 初始化完成');
+    console.log('✅ [Service Container] Stage 4 - Interaction Module Ready');
 
-    // 回傳完整的服務容器
     return {
-        // Google API 客戶端
+        // ...coreServices contents (passed through)
         sheets: coreServices.sheets,
         calendar: coreServices.calendar,
         drive: coreServices.drive,
+        dateHelpers,
 
-        // 工具函式
-        dateHelpers, 
-
-        // 業務邏輯服務
+        // Services
         dashboardService,
         contactService,
         opportunityService,
         companyService,
-        productService, // ✅ 必須匯出，Controller 才能使用
+        productService,
+        interactionService, // ✅ 匯出
         eventLogService,
         weeklyBusinessService,
         salesAnalysisService,
-
-        // 核心工作流服務
         workflowService: coreServices.workflowService,
         calendarService: coreServices.calendarService,
 

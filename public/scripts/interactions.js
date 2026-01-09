@@ -1,13 +1,14 @@
-// views/scripts/interactions.js
+// public/scripts/interactions.js
+// [Version: 2026-01-08-Refactor-SafeDOM]
+// [Date: 2026-01-08]
+// Description: 前端互動紀錄頁面，加入 DOM 安全檢查
 
 /**
  * 載入並渲染所有互動紀錄頁面的主函式
- * @param {number} [page=1] - 要載入的頁碼
- * @param {string} [query=''] - 搜尋關鍵字
  */
 async function loadAllInteractionsPage(page = 1, query = '') {
     const container = document.getElementById('page-interactions');
-    if (!container) return;
+    if (!container) return; // ✅ Safety Check
 
     // 步驟 1: 渲染頁面基本骨架
     container.innerHTML = `
@@ -25,40 +26,47 @@ async function loadAllInteractionsPage(page = 1, query = '') {
         </div>
     `;
 
-    // 綁定搜尋事件
-    document.getElementById('all-interactions-search').addEventListener('keyup', (event) => {
-        if (event.key === 'Enter') {
-            const newQuery = event.target.value;
-            loadAllInteractionsPage(1, newQuery);
-        }
-    });
+    // 綁定搜尋事件 (加入安全檢查)
+    const searchInput = document.getElementById('all-interactions-search');
+    if (searchInput) {
+        searchInput.addEventListener('keyup', (event) => {
+            if (event.key === 'Enter') {
+                const newQuery = event.target.value;
+                loadAllInteractionsPage(1, newQuery);
+            }
+        });
+    }
 
     // 步驟 2: 獲取數據並渲染
     try {
         const result = await authedFetch(`/api/interactions/all?page=${page}&q=${encodeURIComponent(query)}`);
         
-        document.getElementById('all-interactions-content').innerHTML = renderAllInteractionsTable(result.data || []);
+        const contentDiv = document.getElementById('all-interactions-content');
+        if (contentDiv) { // ✅ Safety Check
+            contentDiv.innerHTML = renderAllInteractionsTable(result.data || []);
+        }
+        
         renderPagination('all-interactions-pagination', result.pagination, 'loadAllInteractionsPage');
 
     } catch (error) {
         if (error.message !== 'Unauthorized') {
             console.error('載入所有互動紀錄失敗:', error);
-            document.getElementById('all-interactions-content').innerHTML = `<div class="alert alert-error">載入紀錄失敗: ${error.message}</div>`;
+            const contentDiv = document.getElementById('all-interactions-content');
+            if (contentDiv) {
+                contentDiv.innerHTML = `<div class="alert alert-error">載入紀錄失敗: ${error.message}</div>`;
+            }
         }
     }
 }
 
 /**
- * 【已修改】渲染所有互動紀錄的 *表格* 列表
- * @param {Array<object>} interactions - 互動紀錄資料陣列
- * @returns {string} HTML 表格字串
+ * 渲染所有互動紀錄的表格
  */
 function renderAllInteractionsTable(interactions) {
     if (!interactions || interactions.length === 0) {
         return '<div class="alert alert-info" style="text-align:center;">找不到符合條件的互動紀錄</div>';
     }
 
-    // --- 替換為表格 Table HTML ---
     let tableHTML = `<table class="data-table">
                         <thead>
                             <tr>
@@ -73,29 +81,26 @@ function renderAllInteractionsTable(interactions) {
 
     interactions.forEach(item => {
         let summaryHTML = item.contentSummary || '';
-        // 讓摘要中的報告連結可以點擊
-        const linkRegex = /\[(.*?)\]\(event_log_id=([a-zA-Z0-9]+)\)/g; // 修正 Regex
+        const linkRegex = /\[(.*?)\]\(event_log_id=([a-zA-Z0-9]+)\)/g;
         summaryHTML = summaryHTML.replace(linkRegex, (fullMatch, text, eventId) => {
             const safeEventId = eventId.replace(/'/g, "\\'").replace(/"/g, '&quot;');
             return `<a href="#" class="text-link" onclick="event.preventDefault(); showEventLogReport('${safeEventId}')">${text}</a>`;
         });
 
-        // --- 修正開始：建立可點擊的機會或公司連結 ---
-        // (item.opportunityName 已在後端 reader 修正為會包含公司名稱)
-        let opportunityLink = item.opportunityName || '未指定'; 
+        // 機會/公司連結邏輯 (相容後端 Service 聚合後的資料)
+        let opportunityLink = item.opportunityName || '未指定';
+        
+        // 此處邏輯與後端 Service 一致：若有 opportunityId 則連到機會，否則若有公司 ID 則連到公司
         if (item.opportunityId) {
-            // 連結至機會
             opportunityLink = `<a href="#" class="text-link" onclick="event.preventDefault(); CRM_APP.navigateTo('opportunity-details', { opportunityId: '${item.opportunityId}' })">
                                    ${item.opportunityName}
                                </a>`;
-        } else if (item.companyId && item.opportunityName !== '未指定' && item.opportunityName !== '未知機會' && item.opportunityName !== '未知公司') {
-            // 連結至公司 (item.opportunityName 此時是公司名稱)
+        } else if (item.companyId && item.opportunityName !== '未指定') {
             const encodedCompanyName = encodeURIComponent(item.opportunityName);
             opportunityLink = `<a href="#" class="text-link" onclick="event.preventDefault(); CRM_APP.navigateTo('company-details', { companyName: '${encodedCompanyName}' })">
                                    ${item.opportunityName} (公司)
                                </a>`;
         }
-        // --- 修正結束 ---
 
         tableHTML += `
             <tr>
@@ -112,7 +117,6 @@ function renderAllInteractionsTable(interactions) {
     return tableHTML;
 }
 
-// 【修正】向主應用程式註冊此模組的載入函式
 if (window.CRM_APP) {
     window.CRM_APP.pageModules.interactions = loadAllInteractionsPage;
 }
